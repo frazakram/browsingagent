@@ -162,32 +162,55 @@ class BrowserController:
         html = await self.page.content()
         return clean_and_truncate_html(html)
 
-    async def click(self, selector: str) -> str:
+    async def click(self, selector: str, wait_for_enabled: bool = True) -> str:
         """
-        Click an element. Handles hidden elements by:
+        Click an element. Handles hidden and disabled elements by:
         1. First trying normal click
         2. If element not visible, try scrolling into view
-        3. If still not visible, use JavaScript click (bypasses visibility)
+        3. If element is disabled, wait for it to become enabled
+        4. If still not working, use JavaScript click
         """
         try:
             # First, try normal click with reduced timeout
             await self.page.click(selector, timeout=5000)
         except Exception as e:
             error_msg = str(e).lower()
-            if "not visible" in error_msg or "timeout" in error_msg:
+            
+            # Check if element is disabled
+            if "not enabled" in error_msg or "disabled" in error_msg:
+                if wait_for_enabled:
+                    try:
+                        # Wait for element to become enabled (max 10 seconds)
+                        await self.page.wait_for_selector(
+                            f"{selector}:not([disabled])", 
+                            timeout=10000,
+                            state="attached"
+                        )
+                        await asyncio.sleep(0.3)
+                        await self.page.click(selector, timeout=5000)
+                    except Exception as wait_e:
+                        raise Exception(
+                            f"Button '{selector}' is DISABLED. This usually means:\n"
+                            f"1. A required field hasn't been filled correctly\n"
+                            f"2. Form validation hasn't passed\n"
+                            f"3. You need to complete a previous step first\n"
+                            f"Try filling all required fields before clicking this button."
+                        )
+                else:
+                    raise Exception(f"Element is disabled: {selector}")
+            
+            elif "not visible" in error_msg or "timeout" in error_msg:
                 # Element exists but not visible - try alternative approaches
                 try:
-                    # Try scrolling element into view first
                     element = await self.page.query_selector(selector)
                     if element:
                         await element.scroll_into_view_if_needed()
-                        await asyncio.sleep(0.5)  # Wait for any animations
+                        await asyncio.sleep(0.5)
                         
-                        # Try clicking again
                         try:
                             await self.page.click(selector, timeout=5000)
                         except Exception:
-                            # Last resort: JavaScript click (bypasses visibility checks)
+                            # Last resort: JavaScript click
                             await self.page.evaluate(
                                 """(selector) => {
                                     const el = document.querySelector(selector);
@@ -198,11 +221,10 @@ class BrowserController:
                     else:
                         raise Exception(f"Element not found: {selector}")
                 except Exception as inner_e:
-                    raise Exception(f"Click failed after all attempts: {inner_e}")
+                    raise Exception(f"Click failed: {inner_e}")
             else:
                 raise e
         
-        # Wait for any navigation or dynamic content
         await asyncio.sleep(0.5)
         html = await self.page.content()
         return clean_and_truncate_html(html)
@@ -217,7 +239,36 @@ class BrowserController:
         return clean_and_truncate_html(html)
 
     async def fill(self, selector: str, text: str) -> str:
-        await self.page.fill(selector, text)
+        """
+        Fill an input field with text. Triggers proper events for form validation.
+        """
+        element = await self.page.query_selector(selector)
+        if not element:
+            raise Exception(f"Input field not found: {selector}")
+        
+        # Clear existing value first
+        await self.page.fill(selector, "")
+        
+        # Type the text character by character for better compatibility
+        # This triggers input/change events that simple fill might miss
+        await self.page.type(selector, text, delay=50)
+        
+        # Trigger blur event to activate any validation
+        await self.page.evaluate(
+            """(selector) => {
+                const el = document.querySelector(selector);
+                if (el) {
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.blur();
+                }
+            }""",
+            selector
+        )
+        
+        # Wait a moment for any validation/button enabling
+        await asyncio.sleep(0.5)
+        
         html = await self.page.content()
         return clean_and_truncate_html(html)
 
@@ -240,6 +291,60 @@ class BrowserController:
             txt = await el.inner_text()
             texts.append(txt.strip())
         return "\n".join(texts)
+
+    async def get_form_fields(self) -> str:
+        """
+        Get a list of all form input fields on the page.
+        Returns their type, placeholder, name/id, and suggested selectors.
+        """
+        fields_info = []
+        
+        # Get all input fields
+        inputs = await self.page.query_selector_all("input:not([type='hidden']):not([type='submit']):not([type='button'])")
+        for inp in inputs[:30]:
+            try:
+                inp_type = await inp.get_attribute("type") or "text"
+                inp_id = await inp.get_attribute("id")
+                inp_name = await inp.get_attribute("name")
+                inp_placeholder = await inp.get_attribute("placeholder") or ""
+                inp_value = await inp.get_attribute("value") or ""
+                
+                selector = f"#{inp_id}" if inp_id else (f"input[name='{inp_name}']" if inp_name else f"input[placeholder='{inp_placeholder}']")
+                
+                fields_info.append(
+                    f"INPUT ({inp_type}): placeholder=\"{inp_placeholder}\" "
+                    f"name=\"{inp_name}\" current_value=\"{inp_value}\" -> selector: {selector}"
+                )
+            except:
+                pass
+        
+        # Get all textarea fields
+        textareas = await self.page.query_selector_all("textarea")
+        for ta in textareas[:10]:
+            try:
+                ta_id = await ta.get_attribute("id")
+                ta_name = await ta.get_attribute("name")
+                ta_placeholder = await ta.get_attribute("placeholder") or ""
+                selector = f"#{ta_id}" if ta_id else f"textarea[name='{ta_name}']"
+                fields_info.append(f"TEXTAREA: placeholder=\"{ta_placeholder}\" -> selector: {selector}")
+            except:
+                pass
+        
+        # Get select dropdowns
+        selects = await self.page.query_selector_all("select")
+        for sel in selects[:10]:
+            try:
+                sel_id = await sel.get_attribute("id")
+                sel_name = await sel.get_attribute("name")
+                selector = f"#{sel_id}" if sel_id else f"select[name='{sel_name}']"
+                fields_info.append(f"SELECT: name=\"{sel_name}\" -> selector: {selector}")
+            except:
+                pass
+        
+        if not fields_info:
+            return "No form fields found on the page."
+        
+        return "FORM FIELDS ON PAGE:\n" + "\n".join(fields_info)
 
     async def get_clickable_elements(self) -> str:
         """

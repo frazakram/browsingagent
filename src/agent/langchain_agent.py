@@ -81,6 +81,16 @@ async def get_clickable_elements() -> str:
 
 
 @tool
+async def get_form_fields() -> str:
+    """Get a list of all form input fields on the current page.
+    Use this to discover input fields, their types, and selectors before filling forms.
+    Essential for finding the correct selector for phone numbers, emails, etc."""
+    controller = get_browser_controller()
+    await controller.ensure_session()
+    return await controller.get_form_fields()
+
+
+@tool
 async def click_by_text(text: str) -> str:
     """Click an element by its visible text content. More reliable than CSS selectors.
     Example: click_by_text('Veg Pizzas') or click_by_text('Book Now')"""
@@ -116,21 +126,26 @@ def build_agent(
         max_retries=3,  # Retry up to 3 times on connection errors
     )
 
-    tools = [navigate, click, click_by_text, hover, fill, scroll, extract_text, get_clickable_elements]
+    tools = [navigate, click, click_by_text, hover, fill, scroll, extract_text, get_clickable_elements, get_form_fields]
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", (
             "You are a web-browsing assistant that can use tools to control a real "
             "browser. Break the user task into steps and choose appropriate tools "
             "to navigate, click, fill forms, scroll, and read content.\n\n"
-            "IMPORTANT TIPS:\n"
-            "1. BEFORE clicking, use 'get_clickable_elements' to see available links/buttons.\n"
-            "2. PREFER 'click_by_text' over 'click' - it's more reliable. Example: click_by_text('Menu')\n"
-            "3. For dropdown menus: Use 'hover' first on the parent menu to reveal hidden items.\n"
-            "4. If click fails, try get_clickable_elements to find the correct selector.\n"
-            "5. Don't guess selectors - discover them from the page first.\n\n"
-            "Stay safe: do not perform irreversible actions like finalizing payments "
-            "or deleting data unless the user explicitly confirms."
+            "CRITICAL WORKFLOW:\n"
+            "1. Use 'get_clickable_elements' to discover buttons/links BEFORE clicking.\n"
+            "2. Use 'get_form_fields' to discover input fields BEFORE filling forms.\n"
+            "3. PREFER 'click_by_text' over 'click' - more reliable.\n"
+            "4. For FORMS: Fill ALL required fields BEFORE clicking submit/send buttons.\n"
+            "   - Buttons like 'Send OTP' are often DISABLED until the form is valid.\n"
+            "   - Fill phone/email fields first, then click the button.\n"
+            "5. For dropdown menus: Use 'hover' first to reveal hidden items.\n\n"
+            "EXAMPLE for login/OTP:\n"
+            "  1. get_form_fields() -> find phone input selector\n"
+            "  2. fill('#phone', '9001118162')\n"
+            "  3. click_by_text('Send OTP')\n\n"
+            "Stay safe: do not finalize payments without user confirmation."
         )),
         ("human", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
