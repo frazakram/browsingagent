@@ -359,29 +359,92 @@ class BrowserController:
     async def search(self, selector: str, query: str) -> str:
         """
         Fill a search box and press Enter to submit.
-        This is the preferred way to use search boxes.
+        Tries the given selector first, then common search box patterns.
         """
-        element = await self.page.query_selector(selector)
-        if not element:
-            # Try common search selectors
-            for common_selector in ['input[type="search"]', 'input[name="q"]', 'input[placeholder*="search" i]', '#search', '.search-input']:
-                element = await self.page.query_selector(common_selector)
+        # Common search box selectors to try
+        search_selectors = [
+            selector,  # User-provided selector first
+            'input[type="search"]',
+            'input[name="q"]',
+            'input[name="query"]',
+            'input[name="search"]',
+            'input[name="keyword"]',
+            'input[name="keywords"]',
+            'input[name="searchText"]',
+            'input[placeholder*="search" i]',
+            'input[placeholder*="find" i]',
+            'input[placeholder*="looking" i]',
+            'input[aria-label*="search" i]',
+            '#search',
+            '#search-input',
+            '#searchInput',
+            '#search-box',
+            '#searchbox',
+            '#q',
+            '.search-input',
+            '.search-box',
+            '.searchbox',
+            '[data-testid*="search"]',
+            'input[autocomplete="off"]',  # Many search boxes disable autocomplete
+        ]
+        
+        element = None
+        used_selector = None
+        
+        for sel in search_selectors:
+            if not sel:
+                continue
+            try:
+                element = await self.page.query_selector(sel)
                 if element:
-                    selector = common_selector
-                    break
+                    # Verify it's visible and an input
+                    is_visible = await element.is_visible()
+                    tag = await element.evaluate("el => el.tagName.toLowerCase()")
+                    if is_visible and tag == "input":
+                        used_selector = sel
+                        break
+            except:
+                pass
         
-        if not element:
-            raise Exception(f"Search box not found. Tried: {selector}")
+        if not element or not used_selector:
+            # Get available inputs to help the agent
+            available = await self._get_available_inputs()
+            raise Exception(
+                f"Search box not found with selector: {selector}\n"
+                f"Available input fields on page:\n{available}\n"
+                f"Tip: Use get_form_fields() to see all inputs, then use fill() + press('Enter')"
+            )
         
-        await self.page.fill(selector, "")
-        await self.page.type(selector, query, delay=30)
+        await self.page.fill(used_selector, "")
+        await self.page.type(used_selector, query, delay=30)
         await self.page.keyboard.press("Enter")
         
         # Wait for search results to load
         await asyncio.sleep(2)
         
-        html = await self.page.content()
+        html = await self._get_main_content()
         return clean_and_truncate_html(html)
+
+    async def _get_available_inputs(self) -> str:
+        """Get a summary of available input fields."""
+        try:
+            inputs_info = await self.page.evaluate("""() => {
+                const inputs = document.querySelectorAll('input:not([type="hidden"])');
+                const results = [];
+                inputs.forEach((inp, i) => {
+                    if (i < 10) {  // Limit to first 10
+                        const type = inp.type || 'text';
+                        const name = inp.name || '';
+                        const placeholder = inp.placeholder || '';
+                        const id = inp.id || '';
+                        results.push(`- type="${type}" name="${name}" placeholder="${placeholder}" id="${id}"`);
+                    }
+                });
+                return results.join('\\n');
+            }""")
+            return inputs_info or "No visible inputs found"
+        except:
+            return "Could not retrieve inputs"
 
     async def scroll(self, amount: int = 1000) -> str:
         await self.page.evaluate(
