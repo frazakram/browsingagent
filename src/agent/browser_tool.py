@@ -398,6 +398,39 @@ class BrowserController:
             texts.append(txt.strip())
         return "\n".join(texts)
 
+    async def goto_link_by_text(self, text: str) -> str:
+        """
+        Find a link containing the text and navigate directly to its URL.
+        Bypasses overlay/click issues by extracting href and navigating.
+        """
+        href = await self.page.evaluate(
+            """(text) => {
+                // Find links containing the text
+                const links = document.querySelectorAll('a[href]');
+                for (const link of links) {
+                    const linkText = link.textContent || '';
+                    const ariaLabel = link.getAttribute('aria-label') || '';
+                    const title = link.getAttribute('title') || '';
+                    
+                    if (linkText.toLowerCase().includes(text.toLowerCase()) ||
+                        ariaLabel.toLowerCase().includes(text.toLowerCase()) ||
+                        title.toLowerCase().includes(text.toLowerCase())) {
+                        return link.href;
+                    }
+                }
+                return null;
+            }""",
+            text
+        )
+        
+        if href:
+            await self.page.goto(href)
+            await asyncio.sleep(1)
+            html = await self._get_main_content()
+            return clean_and_truncate_html(html)
+        else:
+            raise Exception(f"No link found containing text: '{text}'")
+
     async def get_form_fields(self) -> str:
         """
         Get a list of all form input fields on the page.
@@ -501,34 +534,83 @@ class BrowserController:
     async def click_by_text(self, text: str) -> str:
         """
         Click an element by its visible text content.
-        More reliable than CSS selectors for dynamic pages.
+        Handles overlays and intercepted clicks using force mode and JS fallback.
         """
-        # Try link first
+        selectors_to_try = [
+            f"a:has-text(\"{text}\")",
+            f"button:has-text(\"{text}\")",
+            f"[aria-label*=\"{text}\" i]",
+            f"text=\"{text}\"",
+        ]
+        
+        last_error = None
+        
+        for selector in selectors_to_try:
+            # First try normal click
+            try:
+                await self.page.click(selector, timeout=3000)
+                await asyncio.sleep(0.5)
+                html = await self._get_main_content()
+                return clean_and_truncate_html(html)
+            except Exception as e:
+                error_msg = str(e).lower()
+                
+                # If intercepted by overlay, try force click
+                if "intercepts pointer" in error_msg or "overlay" in error_msg:
+                    try:
+                        await self.page.click(selector, timeout=3000, force=True)
+                        await asyncio.sleep(0.5)
+                        html = await self._get_main_content()
+                        return clean_and_truncate_html(html)
+                    except:
+                        pass
+                
+                last_error = e
+        
+        # Last resort: JavaScript click on any element containing the text
         try:
-            await self.page.click(f"a:has-text(\"{text}\")", timeout=5000)
-            await asyncio.sleep(0.5)
-            html = await self.page.content()
-            return clean_and_truncate_html(html)
+            clicked = await self.page.evaluate(
+                """(text) => {
+                    // Find all elements containing the text
+                    const xpath = `//*[contains(text(), '${text}')]`;
+                    const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+                    
+                    for (let i = 0; i < result.snapshotLength; i++) {
+                        const el = result.snapshotItem(i);
+                        // Try to find a clickable parent (a, button) or click the element itself
+                        const clickable = el.closest('a, button') || el;
+                        if (clickable) {
+                            clickable.click();
+                            return true;
+                        }
+                    }
+                    
+                    // Also try by href containing the text
+                    const links = document.querySelectorAll('a[href]');
+                    for (const link of links) {
+                        if (link.textContent.includes(text) || link.getAttribute('aria-label')?.includes(text)) {
+                            link.click();
+                            return true;
+                        }
+                    }
+                    
+                    return false;
+                }""",
+                text
+            )
+            
+            if clicked:
+                await asyncio.sleep(1)
+                html = await self._get_main_content()
+                return clean_and_truncate_html(html)
         except:
             pass
         
-        # Try button
-        try:
-            await self.page.click(f"button:has-text(\"{text}\")", timeout=5000)
-            await asyncio.sleep(0.5)
-            html = await self.page.content()
-            return clean_and_truncate_html(html)
-        except:
-            pass
-        
-        # Try any element with that text
-        try:
-            await self.page.click(f"text=\"{text}\"", timeout=5000)
-            await asyncio.sleep(0.5)
-            html = await self.page.content()
-            return clean_and_truncate_html(html)
-        except Exception as e:
-            raise Exception(f"Could not find clickable element with text: '{text}'. Error: {e}")
+        raise Exception(
+            f"Could not click element with text: '{text}'.\n"
+            f"Tip: Try using click() with a direct href selector like: click('a[href*=\"product-name\"]')\n"
+            f"Or navigate directly to the product URL if available."
+        )
 
 
 async def demo():

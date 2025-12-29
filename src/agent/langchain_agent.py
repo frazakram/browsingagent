@@ -103,11 +103,23 @@ async def get_form_fields() -> str:
 
 @tool
 async def click_by_text(text: str) -> str:
-    """Click an element by its visible text content. More reliable than CSS selectors.
-    Example: click_by_text('Veg Pizzas') or click_by_text('Book Now')"""
+    """Click an element by its visible text content. Handles overlay elements.
+    Example: click_by_text('Veg Pizzas') or click_by_text('Book Now')
+    If this fails due to overlays, try goto_link_by_text instead."""
     controller = get_browser_controller()
     await controller.ensure_session()
     return await controller.click_by_text(text)
+
+
+@tool
+async def goto_link_by_text(text: str) -> str:
+    """Find a link containing the text and navigate directly to its URL.
+    BEST for product cards, images with overlays, or any link that's hard to click.
+    Example: goto_link_by_text('Nike Court Vision Low')
+    This bypasses click issues by extracting the href and navigating directly."""
+    controller = get_browser_controller()
+    await controller.ensure_session()
+    return await controller.goto_link_by_text(text)
 
 
 def build_agent(
@@ -137,27 +149,27 @@ def build_agent(
         max_retries=3,  # Retry up to 3 times on connection errors
     )
 
-    tools = [navigate, search, click, click_by_text, hover, fill, scroll, extract_text, get_clickable_elements, get_form_fields]
+    tools = [navigate, search, click, click_by_text, goto_link_by_text, hover, fill, scroll, extract_text, get_clickable_elements, get_form_fields]
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", (
             "You are a web-browsing assistant controlling a real browser.\n\n"
             "KEY TOOLS:\n"
             "- search(selector, query): For SEARCH BOXES - fills and presses Enter\n"
-            "- click_by_text(text): Click by visible text - most reliable\n"
+            "- goto_link_by_text(text): BEST for product cards/images - navigates directly\n"
+            "- click_by_text(text): Click by visible text - handles overlays\n"
             "- fill(selector, text): Fill form fields (phone, email, etc.)\n"
             "- get_form_fields(): Discover input fields before filling\n"
             "- get_clickable_elements(): Discover links/buttons before clicking\n\n"
             "WORKFLOW:\n"
             "1. For SEARCH: Use search() tool, not fill(). It auto-presses Enter.\n"
-            "2. For FORMS: Fill all fields BEFORE clicking submit (buttons may be disabled).\n"
-            "3. For MENUS: Use hover() first to reveal hidden items.\n\n"
-            "EXAMPLE - Search on website:\n"
+            "2. For PRODUCT CARDS: Use goto_link_by_text() - bypasses image overlays.\n"
+            "3. For FORMS: Fill all fields BEFORE clicking submit.\n"
+            "4. For MENUS: Use hover() first to reveal hidden items.\n\n"
+            "EXAMPLE - Click product card:\n"
+            "  goto_link_by_text('Nike Court Vision Low')\n\n"
+            "EXAMPLE - Search:\n"
             "  search('input[type=\"search\"]', 'cold medicine')\n\n"
-            "EXAMPLE - Login/OTP:\n"
-            "  1. get_form_fields()\n"
-            "  2. fill('#phone', '9001118162')\n"
-            "  3. click_by_text('Send OTP')\n\n"
             "Stay safe: never finalize payments without user confirmation."
         )),
         ("human", "{input}"),
