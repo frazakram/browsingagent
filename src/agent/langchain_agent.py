@@ -30,10 +30,20 @@ async def navigate(url: str) -> str:
 
 @tool
 async def click(selector: str) -> str:
-    """Click an element given a CSS selector and return updated page HTML."""
+    """Click an element given a CSS selector and return updated page HTML. 
+    Handles hidden elements automatically by scrolling or using JavaScript click."""
     controller = get_browser_controller()
     await controller.ensure_session()
     return await controller.click(selector)
+
+
+@tool
+async def hover(selector: str) -> str:
+    """Hover over an element to reveal dropdown menus or tooltips. 
+    Use this before clicking on menu items that are hidden until hover."""
+    controller = get_browser_controller()
+    await controller.ensure_session()
+    return await controller.hover(selector)
 
 
 @tool
@@ -87,13 +97,19 @@ def build_agent(
         max_retries=3,  # Retry up to 3 times on connection errors
     )
 
-    tools = [navigate, click, fill, scroll, extract_text]
+    tools = [navigate, click, hover, fill, scroll, extract_text]
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", (
             "You are a web-browsing assistant that can use tools to control a real "
             "browser. Break the user task into steps and choose appropriate tools "
-            "to navigate, click, fill forms, scroll, and read content. "
+            "to navigate, click, fill forms, scroll, and read content.\n\n"
+            "IMPORTANT TIPS:\n"
+            "- For dropdown menus: Use 'hover' first on the parent menu item to reveal "
+            "hidden sub-menu items, then click on the revealed item.\n"
+            "- If a click fails because element is not visible, try hovering on its "
+            "parent element first (like a menu header).\n"
+            "- Use simple CSS selectors like 'button', 'a[href*=\"keyword\"]', or '#id'.\n\n"
             "Stay safe: do not perform irreversible actions like finalizing payments "
             "or deleting data unless the user explicitly confirms. Explain what you "
             "are doing at a high level in your thoughts and then act."

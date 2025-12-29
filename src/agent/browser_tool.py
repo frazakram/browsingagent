@@ -163,7 +163,56 @@ class BrowserController:
         return clean_and_truncate_html(html)
 
     async def click(self, selector: str) -> str:
-        await self.page.click(selector)
+        """
+        Click an element. Handles hidden elements by:
+        1. First trying normal click
+        2. If element not visible, try scrolling into view
+        3. If still not visible, use JavaScript click (bypasses visibility)
+        """
+        try:
+            # First, try normal click with reduced timeout
+            await self.page.click(selector, timeout=5000)
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "not visible" in error_msg or "timeout" in error_msg:
+                # Element exists but not visible - try alternative approaches
+                try:
+                    # Try scrolling element into view first
+                    element = await self.page.query_selector(selector)
+                    if element:
+                        await element.scroll_into_view_if_needed()
+                        await asyncio.sleep(0.5)  # Wait for any animations
+                        
+                        # Try clicking again
+                        try:
+                            await self.page.click(selector, timeout=5000)
+                        except Exception:
+                            # Last resort: JavaScript click (bypasses visibility checks)
+                            await self.page.evaluate(
+                                """(selector) => {
+                                    const el = document.querySelector(selector);
+                                    if (el) el.click();
+                                }""",
+                                selector
+                            )
+                    else:
+                        raise Exception(f"Element not found: {selector}")
+                except Exception as inner_e:
+                    raise Exception(f"Click failed after all attempts: {inner_e}")
+            else:
+                raise e
+        
+        # Wait for any navigation or dynamic content
+        await asyncio.sleep(0.5)
+        html = await self.page.content()
+        return clean_and_truncate_html(html)
+
+    async def hover(self, selector: str) -> str:
+        """
+        Hover over an element. Useful for revealing dropdown menus.
+        """
+        await self.page.hover(selector)
+        await asyncio.sleep(0.5)  # Wait for dropdown/menu to appear
         html = await self.page.content()
         return clean_and_truncate_html(html)
 
