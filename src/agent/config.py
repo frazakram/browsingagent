@@ -39,8 +39,9 @@ class Settings(BaseSettings):
     max_steps: int = 20
     
     # Content length limit to prevent context overflow (in characters)
-    # This helps stay under the model's token limit
-    max_content_length: int = 50000
+    # ~15k chars (~4k tokens) leaves room for conversation history + tool calls
+    # Can be adjusted in .env with MAX_CONTENT_LENGTH
+    max_content_length: int = 15000
 
     @field_validator("headless", mode="before")
     @classmethod

@@ -48,10 +48,21 @@ async def hover(selector: str) -> str:
 
 @tool
 async def fill(selector: str, text: str) -> str:
-    """Fill an input element located by CSS selector with the provided text."""
+    """Fill an input element located by CSS selector with the provided text.
+    For search boxes, use the 'search' tool instead which also presses Enter."""
     controller = get_browser_controller()
     await controller.ensure_session()
     return await controller.fill(selector, text)
+
+
+@tool
+async def search(selector: str, query: str) -> str:
+    """Fill a search box and press Enter to submit. Use this for search boxes!
+    Example: search('input[type=\"search\"]', 'cold medicine')
+    The selector can be a CSS selector for the search input field."""
+    controller = get_browser_controller()
+    await controller.ensure_session()
+    return await controller.search(selector, query)
 
 
 @tool
@@ -126,26 +137,28 @@ def build_agent(
         max_retries=3,  # Retry up to 3 times on connection errors
     )
 
-    tools = [navigate, click, click_by_text, hover, fill, scroll, extract_text, get_clickable_elements, get_form_fields]
+    tools = [navigate, search, click, click_by_text, hover, fill, scroll, extract_text, get_clickable_elements, get_form_fields]
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", (
-            "You are a web-browsing assistant that can use tools to control a real "
-            "browser. Break the user task into steps and choose appropriate tools "
-            "to navigate, click, fill forms, scroll, and read content.\n\n"
-            "CRITICAL WORKFLOW:\n"
-            "1. Use 'get_clickable_elements' to discover buttons/links BEFORE clicking.\n"
-            "2. Use 'get_form_fields' to discover input fields BEFORE filling forms.\n"
-            "3. PREFER 'click_by_text' over 'click' - more reliable.\n"
-            "4. For FORMS: Fill ALL required fields BEFORE clicking submit/send buttons.\n"
-            "   - Buttons like 'Send OTP' are often DISABLED until the form is valid.\n"
-            "   - Fill phone/email fields first, then click the button.\n"
-            "5. For dropdown menus: Use 'hover' first to reveal hidden items.\n\n"
-            "EXAMPLE for login/OTP:\n"
-            "  1. get_form_fields() -> find phone input selector\n"
+            "You are a web-browsing assistant controlling a real browser.\n\n"
+            "KEY TOOLS:\n"
+            "- search(selector, query): For SEARCH BOXES - fills and presses Enter\n"
+            "- click_by_text(text): Click by visible text - most reliable\n"
+            "- fill(selector, text): Fill form fields (phone, email, etc.)\n"
+            "- get_form_fields(): Discover input fields before filling\n"
+            "- get_clickable_elements(): Discover links/buttons before clicking\n\n"
+            "WORKFLOW:\n"
+            "1. For SEARCH: Use search() tool, not fill(). It auto-presses Enter.\n"
+            "2. For FORMS: Fill all fields BEFORE clicking submit (buttons may be disabled).\n"
+            "3. For MENUS: Use hover() first to reveal hidden items.\n\n"
+            "EXAMPLE - Search on website:\n"
+            "  search('input[type=\"search\"]', 'cold medicine')\n\n"
+            "EXAMPLE - Login/OTP:\n"
+            "  1. get_form_fields()\n"
             "  2. fill('#phone', '9001118162')\n"
             "  3. click_by_text('Send OTP')\n\n"
-            "Stay safe: do not finalize payments without user confirmation."
+            "Stay safe: never finalize payments without user confirmation."
         )),
         ("human", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),

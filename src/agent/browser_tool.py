@@ -13,54 +13,103 @@ from .config import settings
 
 def clean_and_truncate_html(html: str, max_length: int = None) -> str:
     """
-    Clean HTML by removing scripts, styles, and excessive whitespace,
-    then truncate to stay within token limits.
+    Aggressively clean HTML by removing ads, scripts, styles, and non-essential content.
+    Focuses on keeping only actionable elements (links, buttons, forms, main content).
     """
     if max_length is None:
         max_length = settings.max_content_length
     
-    # Remove script tags and their content
+    # === REMOVE ENTIRE SECTIONS ===
+    
+    # Scripts and styles
     html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    
-    # Remove style tags and their content
     html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<link[^>]*>', '', html, flags=re.IGNORECASE)
+    html = re.sub(r'<meta[^>]*>', '', html, flags=re.IGNORECASE)
     
-    # Remove HTML comments
+    # Comments
     html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
     
-    # Remove SVG elements (often very large)
-    html = re.sub(r'<svg[^>]*>.*?</svg>', '[SVG]', html, flags=re.DOTALL | re.IGNORECASE)
-    
-    # Remove noscript tags
+    # SVG, canvas, video, audio, iframe (media bloat)
+    html = re.sub(r'<svg[^>]*>.*?</svg>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<canvas[^>]*>.*?</canvas>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<video[^>]*>.*?</video>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<audio[^>]*>.*?</audio>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<iframe[^>]*>.*?</iframe>', '', html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r'<noscript[^>]*>.*?</noscript>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<picture[^>]*>.*?</picture>', '', html, flags=re.DOTALL | re.IGNORECASE)
     
-    # Remove inline styles (data-* attributes and style attributes can be verbose)
+    # === REMOVE ADS AND PROMOTIONAL CONTENT ===
+    
+    # Common ad containers (by class/id patterns)
+    ad_patterns = [
+        r'<[^>]*(class|id)="[^"]*\b(ad|ads|advert|advertisement|banner|promo|promotion|sponsor|sponsored|popup|modal|overlay|cookie|consent|newsletter|subscribe|social|share|widget|sidebar|recommended|trending|related|also-like)[^"]*"[^>]*>.*?</[^>]+>',
+    ]
+    for pattern in ad_patterns:
+        html = re.sub(pattern, '', html, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove elements with ad-related classes more aggressively
+    html = re.sub(r'<div[^>]*(?:ad-|ads-|advert|banner|promo|popup|modal|cookie|newsletter)[^>]*>.*?</div>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<section[^>]*(?:ad-|ads-|advert|banner|promo|popup|modal)[^>]*>.*?</section>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<aside[^>]*>.*?</aside>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove header, footer, nav (navigation bloat)
+    html = re.sub(r'<header[^>]*>.*?</header>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<footer[^>]*>.*?</footer>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<nav[^>]*>.*?</nav>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    
+    # === REMOVE UNNECESSARY ATTRIBUTES ===
+    
+    # Keep only essential attributes: href, src, id, name, type, placeholder, value, alt, action, method
     html = re.sub(r'\s+style="[^"]*"', '', html)
     html = re.sub(r"\s+style='[^']*'", '', html)
-    
-    # Remove data-* attributes (often used for tracking/analytics)
+    html = re.sub(r'\s+class="[^"]*"', '', html)
+    html = re.sub(r"\s+class='[^']*'", '', html)
     html = re.sub(r'\s+data-[a-zA-Z0-9-]+="[^"]*"', '', html)
+    html = re.sub(r'\s+aria-[a-zA-Z0-9-]+="[^"]*"', '', html)
+    html = re.sub(r'\s+role="[^"]*"', '', html)
+    html = re.sub(r'\s+tabindex="[^"]*"', '', html)
+    html = re.sub(r'\s+on[a-z]+="[^"]*"', '', html)
+    html = re.sub(r'\s+target="[^"]*"', '', html)
+    html = re.sub(r'\s+rel="[^"]*"', '', html)
+    html = re.sub(r'\s+loading="[^"]*"', '', html)
+    html = re.sub(r'\s+srcset="[^"]*"', '', html)
+    html = re.sub(r'\s+sizes="[^"]*"', '', html)
+    html = re.sub(r'\s+width="[^"]*"', '', html)
+    html = re.sub(r'\s+height="[^"]*"', '', html)
     
-    # Remove class attributes that are very long (likely Tailwind or similar)
-    def truncate_class(match):
-        classes = match.group(1)
-        if len(classes) > 100:
-            return f' class="{classes[:100]}..."'
-        return match.group(0)
-    html = re.sub(r'\s+class="([^"]*)"', truncate_class, html)
+    # === SIMPLIFY IMAGES ===
+    # Replace img tags with just their alt text
+    def simplify_img(match):
+        alt = re.search(r'alt="([^"]*)"', match.group(0))
+        if alt and alt.group(1).strip():
+            return f'[IMG:{alt.group(1)[:30]}]'
+        return ''
+    html = re.sub(r'<img[^>]*>', simplify_img, html, flags=re.IGNORECASE)
     
-    # Normalize whitespace
+    # === CLEAN UP EMPTY AND REDUNDANT ELEMENTS ===
+    
+    # Remove empty tags (multiple passes)
+    for _ in range(3):
+        html = re.sub(r'<(div|span|p|section|article|ul|ol|li|table|tr|td|th)[^>]*>\s*</\1>', '', html, flags=re.IGNORECASE)
+    
+    # Remove br tags
+    html = re.sub(r'<br\s*/?>', ' ', html, flags=re.IGNORECASE)
+    
+    # === NORMALIZE WHITESPACE ===
     html = re.sub(r'\s+', ' ', html)
     html = re.sub(r'>\s+<', '><', html)
+    html = re.sub(r'\s+>', '>', html)
+    html = re.sub(r'<\s+', '<', html)
     
-    # Truncate if still too long
+    # === TRUNCATE IF STILL TOO LONG ===
     if len(html) > max_length:
         truncated = html[:max_length]
         # Try to truncate at a tag boundary
         last_close = truncated.rfind('>')
         if last_close > max_length * 0.8:
             truncated = truncated[:last_close + 1]
-        return truncated + "\n\n[... Content truncated to stay within token limits ...]"
+        return truncated + "\n[...TRUNCATED...]"
     
     return html
 
@@ -159,8 +208,34 @@ class BrowserController:
 
     async def navigate(self, url: str) -> str:
         await self.page.goto(url)
-        html = await self.page.content()
+        # Try to get just the main content area first
+        html = await self._get_main_content()
         return clean_and_truncate_html(html)
+
+    async def _get_main_content(self) -> str:
+        """Try to extract just the main content, falling back to full page."""
+        # Try common main content selectors
+        main_selectors = ['main', 'article', '[role="main"]', '#main', '#content', '.main-content', '.content']
+        
+        for selector in main_selectors:
+            try:
+                element = await self.page.query_selector(selector)
+                if element:
+                    html = await element.inner_html()
+                    if len(html) > 500:  # Make sure we got substantial content
+                        return html
+            except:
+                pass
+        
+        # Fall back to body content
+        try:
+            body = await self.page.query_selector('body')
+            if body:
+                return await body.inner_html()
+        except:
+            pass
+        
+        return await self.page.content()
 
     async def click(self, selector: str, wait_for_enabled: bool = True) -> str:
         """
@@ -238,9 +313,10 @@ class BrowserController:
         html = await self.page.content()
         return clean_and_truncate_html(html)
 
-    async def fill(self, selector: str, text: str) -> str:
+    async def fill(self, selector: str, text: str, press_enter: bool = False) -> str:
         """
         Fill an input field with text. Triggers proper events for form validation.
+        Optionally press Enter after filling (useful for search boxes).
         """
         element = await self.page.query_selector(selector)
         if not element:
@@ -250,8 +326,7 @@ class BrowserController:
         await self.page.fill(selector, "")
         
         # Type the text character by character for better compatibility
-        # This triggers input/change events that simple fill might miss
-        await self.page.type(selector, text, delay=50)
+        await self.page.type(selector, text, delay=30)
         
         # Trigger blur event to activate any validation
         await self.page.evaluate(
@@ -260,20 +335,51 @@ class BrowserController:
                 if (el) {
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
-                    el.blur();
                 }
             }""",
             selector
         )
         
-        # Wait a moment for any validation/button enabling
-        await asyncio.sleep(0.5)
+        # Press Enter if requested (for search boxes)
+        if press_enter:
+            await self.page.keyboard.press("Enter")
+            await asyncio.sleep(1)  # Wait for search results
+        else:
+            await asyncio.sleep(0.3)
         
         html = await self.page.content()
         return clean_and_truncate_html(html)
 
     async def press(self, key: str) -> str:
         await self.page.keyboard.press(key)
+        await asyncio.sleep(0.5)
+        html = await self.page.content()
+        return clean_and_truncate_html(html)
+
+    async def search(self, selector: str, query: str) -> str:
+        """
+        Fill a search box and press Enter to submit.
+        This is the preferred way to use search boxes.
+        """
+        element = await self.page.query_selector(selector)
+        if not element:
+            # Try common search selectors
+            for common_selector in ['input[type="search"]', 'input[name="q"]', 'input[placeholder*="search" i]', '#search', '.search-input']:
+                element = await self.page.query_selector(common_selector)
+                if element:
+                    selector = common_selector
+                    break
+        
+        if not element:
+            raise Exception(f"Search box not found. Tried: {selector}")
+        
+        await self.page.fill(selector, "")
+        await self.page.type(selector, query, delay=30)
+        await self.page.keyboard.press("Enter")
+        
+        # Wait for search results to load
+        await asyncio.sleep(2)
+        
         html = await self.page.content()
         return clean_and_truncate_html(html)
 
