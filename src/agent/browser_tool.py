@@ -241,6 +241,84 @@ class BrowserController:
             texts.append(txt.strip())
         return "\n".join(texts)
 
+    async def get_clickable_elements(self) -> str:
+        """
+        Get a list of all clickable elements (links and buttons) on the page.
+        Returns their text, href/type, and suggested selectors.
+        """
+        elements_info = []
+        
+        # Get all links
+        links = await self.page.query_selector_all("a[href]")
+        for i, link in enumerate(links[:50]):  # Limit to first 50 links
+            try:
+                text = (await link.inner_text()).strip()[:50]  # Truncate long text
+                href = await link.get_attribute("href")
+                if text or href:
+                    elements_info.append(f"LINK: \"{text}\" -> href=\"{href}\"")
+            except:
+                pass
+        
+        # Get all buttons
+        buttons = await self.page.query_selector_all("button")
+        for i, btn in enumerate(buttons[:20]):  # Limit to first 20 buttons
+            try:
+                text = (await btn.inner_text()).strip()[:50]
+                btn_type = await btn.get_attribute("type") or "button"
+                btn_id = await btn.get_attribute("id")
+                selector_hint = f"#{btn_id}" if btn_id else f"button:has-text(\"{text}\")"
+                elements_info.append(f"BUTTON: \"{text}\" (type={btn_type}) -> selector: {selector_hint}")
+            except:
+                pass
+        
+        # Get clickable inputs (submit buttons)
+        inputs = await self.page.query_selector_all("input[type='submit'], input[type='button']")
+        for inp in inputs[:10]:
+            try:
+                value = await inp.get_attribute("value") or ""
+                inp_id = await inp.get_attribute("id")
+                selector_hint = f"#{inp_id}" if inp_id else f"input[value=\"{value}\"]"
+                elements_info.append(f"INPUT: \"{value}\" -> selector: {selector_hint}")
+            except:
+                pass
+        
+        if not elements_info:
+            return "No clickable elements found on the page."
+        
+        return "CLICKABLE ELEMENTS ON PAGE:\n" + "\n".join(elements_info)
+
+    async def click_by_text(self, text: str) -> str:
+        """
+        Click an element by its visible text content.
+        More reliable than CSS selectors for dynamic pages.
+        """
+        # Try link first
+        try:
+            await self.page.click(f"a:has-text(\"{text}\")", timeout=5000)
+            await asyncio.sleep(0.5)
+            html = await self.page.content()
+            return clean_and_truncate_html(html)
+        except:
+            pass
+        
+        # Try button
+        try:
+            await self.page.click(f"button:has-text(\"{text}\")", timeout=5000)
+            await asyncio.sleep(0.5)
+            html = await self.page.content()
+            return clean_and_truncate_html(html)
+        except:
+            pass
+        
+        # Try any element with that text
+        try:
+            await self.page.click(f"text=\"{text}\"", timeout=5000)
+            await asyncio.sleep(0.5)
+            html = await self.page.content()
+            return clean_and_truncate_html(html)
+        except Exception as e:
+            raise Exception(f"Could not find clickable element with text: '{text}'. Error: {e}")
+
 
 async def demo():
     """

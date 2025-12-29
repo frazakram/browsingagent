@@ -70,6 +70,25 @@ async def extract_text(selector: str) -> str:
     return await controller.extract_text(selector)
 
 
+@tool
+async def get_clickable_elements() -> str:
+    """Get a list of all clickable elements (links and buttons) on the current page.
+    Use this to discover what elements are available before trying to click.
+    Returns text content, href attributes, and suggested selectors."""
+    controller = get_browser_controller()
+    await controller.ensure_session()
+    return await controller.get_clickable_elements()
+
+
+@tool
+async def click_by_text(text: str) -> str:
+    """Click an element by its visible text content. More reliable than CSS selectors.
+    Example: click_by_text('Veg Pizzas') or click_by_text('Book Now')"""
+    controller = get_browser_controller()
+    await controller.ensure_session()
+    return await controller.click_by_text(text)
+
+
 def build_agent(
     openai_key: str | None = None,
     openai_model: str | None = None,
@@ -97,7 +116,7 @@ def build_agent(
         max_retries=3,  # Retry up to 3 times on connection errors
     )
 
-    tools = [navigate, click, hover, fill, scroll, extract_text]
+    tools = [navigate, click, click_by_text, hover, fill, scroll, extract_text, get_clickable_elements]
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", (
@@ -105,14 +124,13 @@ def build_agent(
             "browser. Break the user task into steps and choose appropriate tools "
             "to navigate, click, fill forms, scroll, and read content.\n\n"
             "IMPORTANT TIPS:\n"
-            "- For dropdown menus: Use 'hover' first on the parent menu item to reveal "
-            "hidden sub-menu items, then click on the revealed item.\n"
-            "- If a click fails because element is not visible, try hovering on its "
-            "parent element first (like a menu header).\n"
-            "- Use simple CSS selectors like 'button', 'a[href*=\"keyword\"]', or '#id'.\n\n"
+            "1. BEFORE clicking, use 'get_clickable_elements' to see available links/buttons.\n"
+            "2. PREFER 'click_by_text' over 'click' - it's more reliable. Example: click_by_text('Menu')\n"
+            "3. For dropdown menus: Use 'hover' first on the parent menu to reveal hidden items.\n"
+            "4. If click fails, try get_clickable_elements to find the correct selector.\n"
+            "5. Don't guess selectors - discover them from the page first.\n\n"
             "Stay safe: do not perform irreversible actions like finalizing payments "
-            "or deleting data unless the user explicitly confirms. Explain what you "
-            "are doing at a high level in your thoughts and then act."
+            "or deleting data unless the user explicitly confirms."
         )),
         ("human", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
