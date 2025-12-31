@@ -324,10 +324,22 @@ class BrowserController:
         """
         Fill an input field with text. Triggers proper events for form validation.
         Optionally press Enter after filling (useful for search boxes).
+        Automatically handles radio buttons and checkboxes by clicking them instead.
         """
         element = await self.page.query_selector(selector)
         if not element:
             raise Exception(f"Input field not found: {selector}")
+        
+        # Check the input type
+        input_type = await element.get_attribute("type") or "text"
+        input_type = input_type.lower()
+        
+        # Handle radio buttons and checkboxes - click instead of fill
+        if input_type in ["radio", "checkbox"]:
+            await element.click()
+            await asyncio.sleep(0.3)
+            html = await self.page.content()
+            return clean_and_truncate_html(html)
         
         # Clear existing value first
         await self.page.fill(selector, "")
@@ -360,6 +372,69 @@ class BrowserController:
     async def press(self, key: str) -> str:
         await self.page.keyboard.press(key)
         await asyncio.sleep(0.5)
+        html = await self.page.content()
+        return clean_and_truncate_html(html)
+
+    async def select_option(self, selector: str, value: str) -> str:
+        """
+        Select an option from a dropdown, radio button group, or checkbox.
+        
+        For SELECT dropdowns: selector should target the <select> element.
+        For radio buttons: selector can target the specific radio input, or use value to find it.
+        For checkboxes: selector should target the checkbox input.
+        
+        The value can be the option value, visible text, or label.
+        """
+        element = await self.page.query_selector(selector)
+        
+        if not element:
+            # Try to find by value in radio buttons or checkboxes
+            radio_selector = f'input[type="radio"][value="{value}"]'
+            element = await self.page.query_selector(radio_selector)
+            if element:
+                await element.click()
+                await asyncio.sleep(0.3)
+                html = await self.page.content()
+                return clean_and_truncate_html(html)
+            
+            raise Exception(f"Element not found: {selector}")
+        
+        tag_name = await element.evaluate("el => el.tagName.toLowerCase()")
+        input_type = await element.get_attribute("type") or ""
+        
+        # Handle SELECT dropdown
+        if tag_name == "select":
+            try:
+                # Try selecting by value first
+                await self.page.select_option(selector, value=value)
+            except:
+                try:
+                    # Try selecting by label/text
+                    await self.page.select_option(selector, label=value)
+                except:
+                    raise Exception(f"Could not select option '{value}' in dropdown")
+        
+        # Handle radio button
+        elif input_type.lower() == "radio":
+            await element.click()
+        
+        # Handle checkbox
+        elif input_type.lower() == "checkbox":
+            # Check if we need to check or uncheck
+            is_checked = await element.is_checked()
+            if value.lower() in ["true", "yes", "check", "1", "on"] and not is_checked:
+                await element.click()
+            elif value.lower() in ["false", "no", "uncheck", "0", "off"] and is_checked:
+                await element.click()
+            else:
+                # Toggle if no specific value given
+                await element.click()
+        
+        # Handle clicking a label or button that acts as a selector
+        else:
+            await element.click()
+        
+        await asyncio.sleep(0.3)
         html = await self.page.content()
         return clean_and_truncate_html(html)
 

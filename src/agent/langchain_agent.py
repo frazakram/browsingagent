@@ -49,10 +49,26 @@ async def hover(selector: str) -> str:
 @tool
 async def fill(selector: str, text: str) -> str:
     """Fill an input element located by CSS selector with the provided text.
-    For search boxes, use the 'search' tool instead which also presses Enter."""
+    For search boxes, use the 'search' tool instead which also presses Enter.
+    Note: For radio buttons and checkboxes, use select_option() instead."""
     controller = get_browser_controller()
     await controller.ensure_session()
     return await controller.fill(selector, text)
+
+
+@tool
+async def select_option(selector: str, value: str) -> str:
+    """Select an option from dropdowns, radio buttons, or checkboxes.
+    
+    For SIZE selection (radio buttons): select_option('input[value=\"EURO-44\"]', 'click')
+    For DROPDOWN: select_option('select#size', 'Large')
+    For CHECKBOX: select_option('input[type=\"checkbox\"]#agree', 'check')
+    
+    Can also find radio by value: select_option('input[type=\"radio\"]', 'EURO-44')
+    """
+    controller = get_browser_controller()
+    await controller.ensure_session()
+    return await controller.select_option(selector, value)
 
 
 @tool
@@ -149,7 +165,7 @@ def build_agent(
         max_retries=3,  # Retry up to 3 times on connection errors
     )
 
-    tools = [navigate, search, click, click_by_text, goto_link_by_text, hover, fill, scroll, extract_text, get_clickable_elements, get_form_fields]
+    tools = [navigate, search, click, click_by_text, goto_link_by_text, hover, fill, select_option, scroll, extract_text, get_clickable_elements, get_form_fields]
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", (
@@ -159,22 +175,27 @@ def build_agent(
             "- search(selector, query): For SEARCH BOXES - fills and presses Enter. Auto-navigates to Google if on blank page.\n"
             "- goto_link_by_text(text): BEST for product cards/images - navigates directly\n"
             "- click_by_text(text): Click by visible text - handles overlays\n"
-            "- fill(selector, text): Fill form fields (phone, email, etc.)\n"
+            "- fill(selector, text): Fill TEXT input fields (phone, email, etc.)\n"
+            "- select_option(selector, value): For RADIO BUTTONS, CHECKBOXES, DROPDOWNS (size selectors, etc.)\n"
             "- get_form_fields(): Discover input fields before filling\n"
             "- get_clickable_elements(): Discover links/buttons before clicking\n\n"
+            "IMPORTANT - SELECTING SIZES/OPTIONS:\n"
+            "- For SIZE radio buttons: click_by_text('EURO-44') or select_option('input[value=\"EURO-44\"]', 'click')\n"
+            "- For dropdown menus: select_option('select#size', 'Large')\n"
+            "- NEVER use fill() on radio buttons or checkboxes!\n\n"
             "WORKFLOW:\n"
-            "1. ALWAYS START by navigating to a website first! For general searches, use: navigate('https://www.google.com')\n"
-            "2. For SEARCH: Use search('input[name=\"q\"]', 'your query') on Google, or search('input[type=\"search\"]', 'query') on other sites.\n"
+            "1. ALWAYS START by navigating to a website first!\n"
+            "2. For SEARCH: Use search() tool - it auto-presses Enter.\n"
             "3. For PRODUCT CARDS: Use goto_link_by_text() - bypasses image overlays.\n"
-            "4. For FORMS: Fill all fields BEFORE clicking submit.\n"
-            "5. For MENUS: Use hover() first to reveal hidden items.\n\n"
-            "EXAMPLE - Web search:\n"
-            "  Step 1: navigate('https://www.google.com')\n"
-            "  Step 2: search('textarea[name=\"q\"]', 'iPhone 17 Pro price')\n\n"
-            "EXAMPLE - Search on a specific site:\n"
-            "  Step 1: navigate('https://www.amazon.com')\n"
-            "  Step 2: search('input[name=\"field-keywords\"]', 'iPhone')\n\n"
-            "For price comparison, visit multiple sites like Google Shopping, Amazon, Best Buy, etc.\n"
+            "4. For SIZE/COLOR selection: Use click_by_text() or select_option() - NOT fill()!\n"
+            "5. For TEXT inputs: Use fill() for name, email, phone, etc.\n"
+            "6. For MENUS: Use hover() first to reveal hidden items.\n\n"
+            "EXAMPLE - Add product to cart:\n"
+            "  Step 1: navigate('https://www.westside.com')\n"
+            "  Step 2: search('input[type=\"search\"]', 'soleplay sleepers')\n"
+            "  Step 3: goto_link_by_text('product name')\n"
+            "  Step 4: click_by_text('EURO-44')  <-- For size selection\n"
+            "  Step 5: click_by_text('Add to Cart')\n\n"
             "Stay safe: never finalize payments without user confirmation."
         )),
         ("human", "{input}"),
