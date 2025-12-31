@@ -19,9 +19,6 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_model: str = "gpt-4o-mini"
     
-    # Optional: Serper.dev API key for better web search
-    serper_api_key: str = ""
-    
     @field_validator("openai_model", mode="before")
     @classmethod
     def validate_model(cls, v):
@@ -37,32 +34,13 @@ class Settings(BaseSettings):
         return "gpt-4o-mini"
 
     # Playwright / browser settings
-    headless: bool = False
+    headless: bool = True
     navigation_timeout_ms: int = 30000
     max_steps: int = 20
-    
-    # Content length limit to prevent context overflow (in characters)
-    # ~15k chars (~4k tokens) leaves room for conversation history + tool calls
-    # Can be adjusted in .env with MAX_CONTENT_LENGTH
-    max_content_length: int = 15000
-    
-    # RAG Pipeline settings
-    rag_max_sources: int = 8
-    rag_enable_verification: bool = True
-    rag_enable_cache: bool = True
-    rag_chunk_size: int = 500
-    rag_chunk_overlap: int = 100
 
     @field_validator("headless", mode="before")
     @classmethod
     def parse_bool(cls, v):
-        if isinstance(v, str):
-            return v.lower() in ("true", "1", "yes")
-        return bool(v)
-    
-    @field_validator("rag_enable_verification", "rag_enable_cache", mode="before")
-    @classmethod
-    def parse_rag_bool(cls, v):
         if isinstance(v, str):
             return v.lower() in ("true", "1", "yes")
         return bool(v)

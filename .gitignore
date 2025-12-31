@@ -1,88 +1,16 @@
-# ===================
-# Python
-# ===================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# ===================
-# Virtual Environments
-# ===================
-myenv/
-myenv_win/
+.env
+.venv
+env/
 venv/
 ENV/
-env/
-.venv/
-
-# ===================
-# Environment Variables
-# ===================
-.env
-.env.local
-.env.*.local
-
-# ===================
-# IDE / Editor
-# ===================
-.idea/
+env.bak/
+venv.bak/
+myenv/
+myenv2/
+myenv_win/
 .vscode/
-*.swp
-*.swo
-*~
-.project
-.pydevproject
-.settings/
-*.sublime-project
-*.sublime-workspace
-
-# ===================
-# OS Generated
-# ===================
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-__MACOSX/
-
-# ===================
-# Playwright
-# ===================
-playwright-report/
-test-results/
-
-# ===================
-# Logs
-# ===================
-*.log
-logs/
-
-# ===================
-# Misc
-# ===================
-*.bak
-*.tmp
-*.temp
-.cache/
-
-
+.idea/

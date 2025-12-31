@@ -12,13 +12,13 @@ import logging
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import json
 
 from src.agent.config import settings  # noqa: F401  # trigger settings load early
-from src.agent.langchain_agent import run_agent
-from src.rag.rag_agent import RAGAgent
+from src.agent.langchain_agent import run_agent, run_agent_stream
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,27 +43,6 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     result: str
-    success: bool
-    error: Optional[str] = None
-
-
-class RAGRequest(BaseModel):
-    query: str
-    openai_key: Optional[str] = None
-    openai_model: Optional[str] = None
-    serper_key: Optional[str] = None
-    max_sources: Optional[int] = 8
-    enable_verification: Optional[bool] = True
-
-
-class RAGResponse(BaseModel):
-    answer: str
-    answer_html: str
-    sources: list
-    citations_used: list
-    confidence: float
-    verification_status: str
-    timing: dict
     success: bool
     error: Optional[str] = None
 
@@ -451,6 +430,16 @@ async def root():
             <p>Agent is working... This may take a minute.</p>
         </div>
 
+
+        <div class="logs-container" id="logsContainer">
+            <div class="logs-header">
+                <span class="logs-title">📜 Activity Log</span>
+                <span class="logs-toggle" onclick="toggleLogs()">Hide</span>
+            </div>
+            <div class="logs-content" id="logsContent"></div>
+            <div class="logs-status" id="logsStatus">Waiting for input...</div>
+        </div>
+
         <div class="result-container" id="resultContainer">
             <div class="result-header">
                 <div class="result-title">
@@ -462,9 +451,88 @@ async def root():
         </div>
     </div>
 
+    <style>
+        /* Add styles for logs */
+        .logs-container {
+            margin-top: 20px;
+            background: #1e1e1e;
+            border-radius: 10px;
+            overflow: hidden;
+            display: none; /* Hidden by default until active */
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        .logs-container.show {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+
+        .logs-header {
+            padding: 10px 15px;
+            background: #2d2d2d;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logs-title {
+            color: #ccc;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+
+        .logs-toggle {
+            color: #667eea;
+            font-size: 0.85em;
+            cursor: pointer;
+        }
+        
+        .logs-toggle:hover { text-decoration: underline; }
+
+        .logs-content {
+            padding: 15px;
+            max-height: 300px;
+            overflow-y: auto;
+            color: #a9b7c6;
+            font-size: 0.9em;
+        }
+
+        .log-entry { margin-bottom: 8px; line-height: 1.4; border-bottom: 1px solid #333; padding-bottom: 4px; }
+        .log-entry:last-child { border-bottom: none; }
+        .log-timestamp { color: #808080; margin-right: 8px; font-size: 0.8em; }
+
+        .logs-status {
+            padding: 5px 15px;
+            background: #252526;
+            color: #808080;
+            font-size: 0.8em;
+            border-top: 1px solid #333;
+        }
+        
+        /* Markdown / formatting for logs */
+        .log-entry strong { color: #fff; }
+        .log-entry code { background: #333; padding: 2px 4px; border-radius: 3px; color: #eebb00; }
+    </style>
+
     <script>
+        const md = window.markdownit ? window.markdownit() : null; // check if markdown-it is available, else raw
+
         function setExample(text) {
             document.getElementById('query').value = text;
+        }
+        
+        function toggleLogs() {
+            const content = document.getElementById('logsContent');
+            const toggle = document.querySelector('.logs-toggle');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                toggle.textContent = 'Hide';
+            } else {
+                content.style.display = 'none';
+                toggle.textContent = 'Show';
+            }
         }
 
         async function submitQuery() {
@@ -478,67 +546,115 @@ async def root():
             const loading = document.getElementById('loading');
             const resultContainer = document.getElementById('resultContainer');
             const resultContent = document.getElementById('resultContent');
+            const logsContainer = document.getElementById('logsContainer');
+            const logsContent = document.getElementById('logsContent');
+            const logsStatus = document.getElementById('logsStatus');
 
+            // Reset UI
             submitBtn.disabled = true;
-            loading.classList.add('show');
+            loading.classList.remove('show'); // We use logs instead of the spinner now, or both
             resultContainer.classList.remove('show');
+            logsContainer.classList.add('show');
+            logsContent.innerHTML = '';
+            logsStatus.textContent = 'Starting agent...';
+            resultContent.innerHTML = '';
 
             try {
+                // Collect params
                 const provider = document.querySelector('input[name="provider"]:checked')?.value || 'openai';
-
                 const openaiKey = document.getElementById('openaiKey').value.trim();
                 const openaiModel = document.getElementById('openaiModel').value.trim();
-                const anthropicKey = document.getElementById('anthropicKey').value.trim();
-                const anthropicModel = document.getElementById('anthropicModel').value.trim();
-                const geminiKey = document.getElementById('geminiKey').value.trim();
-                const geminiModel = document.getElementById('geminiModel').value.trim();
+                // (Others could be added here)
 
                 const payload = {
                     query: query,
                     provider: provider,
                     openai_key: openaiKey || null,
                     openai_model: openaiModel || null,
-                    anthropic_key: anthropicKey || null,
-                    anthropic_model: anthropicModel || null,
-                    gemini_key: geminiKey || null,
-                    gemini_model: geminiModel || null,
                 };
 
-                const response = await fetch('/api/query', {
+                // Use the stream endpoint
+                const response = await fetch('/api/stream_query', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(payload),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
                 });
 
-                const data = await response.json();
-
-                if (data.success) {
-                    resultContent.textContent = data.result;
-                    resultContent.className = 'result-content';
-                } else {
-                    resultContent.innerHTML = `<div class="error">Error: ${data.error || 'Unknown error'}</div>`;
-                    resultContent.className = 'result-content';
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
 
-                resultContainer.classList.add('show');
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    
+                    // Split by newlines (SSE format usually sends line by line or json chunks)
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Keep the last partial line
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        try {
+                            const data = JSON.parse(line);
+                            handleStreamEvent(data, logsContent, logsStatus, resultContent, resultContainer);
+                        } catch (e) {
+                            console.warn("Error parsing JSON chunk", e, line);
+                        }
+                    }
+                }
+
             } catch (error) {
-                resultContent.innerHTML = `<div class="error">Network error: ${error.message}</div>`;
-                resultContent.className = 'result-content';
-                resultContainer.classList.add('show');
+                logsContent.innerHTML += `<div class="error">Network/System error: ${error.message}</div>`;
+                logsStatus.textContent = 'Error occurred.';
             } finally {
                 submitBtn.disabled = false;
-                loading.classList.remove('show');
+                logsStatus.textContent = 'Done.';
+            }
+        }
+
+        function handleStreamEvent(data, logsContent, logsStatus, resultContent, resultContainer) {
+            if (data.type === 'log') {
+                const div = document.createElement('div');
+                div.className = 'log-entry';
+                // Simple formatting
+                let html = data.content
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/`(.*?)`/g, '<code>$1</code>')
+                    .replace(/\n/g, '<br>');
+                div.innerHTML = `<span class="log-timestamp">${new Date().toLocaleTimeString()}</span> ${html}`;
+                logsContent.appendChild(div);
+                // Auto scroll
+                logsContent.scrollTop = logsContent.scrollHeight;
+                logsStatus.textContent = "Working...";
+            } else if (data.type === 'result') {
+                resultContent.textContent = data.content; // Or use a markdown renderer if available
+                resultContent.className = 'result-content';
+                resultContainer.classList.add('show');
+                logsStatus.textContent = 'Result received.';
+            } else if (data.type === 'error') {
+                 const div = document.createElement('div');
+                 div.className = 'log-entry';
+                 div.style.color = '#ff6b6b';
+                 div.textContent = `❌ ${data.content}`;
+                 logsContent.appendChild(div);
+                 logsStatus.textContent = 'Error.';
             }
         }
 
         function clearResult() {
             document.getElementById('resultContainer').classList.remove('show');
+            document.getElementById('logsContainer').classList.remove('show');
             document.getElementById('query').value = '';
         }
 
-        // Allow Enter key to submit (Ctrl+Enter or Cmd+Enter)
+        // Allow Enter key to submit
         document.getElementById('query').addEventListener('keydown', function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 submitQuery();
@@ -546,6 +662,7 @@ async def root():
         });
     </script>
 </body>
+
 </html>
     """
 
@@ -587,75 +704,47 @@ async def handle_query(request: QueryRequest):
         )
 
 
-@app.post("/api/rag", response_model=RAGResponse)
-async def handle_rag_query(request: RAGRequest):
-    """
-    Handle a RAG query - Perplexity-style search and answer with citations.
-    
-    This endpoint searches the web, retrieves relevant information,
-    and generates an answer with inline citations.
-    """
-    if not request.query.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty")
-    
-    logger.info("Received RAG query: %s", request.query)
-    
-    try:
-        # Use provided API key or fall back to settings
-        api_key = request.openai_key or settings.openai_api_key
-        serper_key = request.serper_key or (settings.serper_api_key if settings.serper_api_key else None)
-        model = request.openai_model or settings.openai_model
-        
-        # Create RAG agent
-        agent = RAGAgent(
-            openai_api_key=api_key,
-            serper_api_key=serper_key,
-            model=model,
-            max_sources=request.max_sources or settings.rag_max_sources,
-            enable_verification=request.enable_verification if request.enable_verification is not None else settings.rag_enable_verification,
-            enable_cache=settings.rag_enable_cache,
-        )
-        
-        try:
-            # Execute RAG pipeline
-            result = await agent.query(request.query)
-            
-            return RAGResponse(
-                answer=result.answer,
-                answer_html=result.answer_html,
-                sources=result.sources,
-                citations_used=result.citations_used,
-                confidence=result.confidence,
-                verification_status=result.verification_status,
-                timing=result.timing,
-                success=True
-            )
-        finally:
-            await agent.close()
-            
-    except Exception as exc:
-        logger.exception("RAG execution failed: %s", exc)
-        return RAGResponse(
-            answer="",
-            answer_html="",
-            sources=[],
-            citations_used=[],
-            confidence=0.0,
-            verification_status="error",
-            timing={},
-            success=False,
-            error=str(exc),
-        )
-
-
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "service": "browsing-agent"}
 
 
+@app.post("/api/stream_query")
+async def stream_query(request: QueryRequest):
+    """Handle a user query and stream the result using Server-Sent Events (SSE) style JSON chunks."""
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    logger.info("Received info stream query: %s", request.query)
+
+    async def event_generator():
+        try:
+            # Check provider (only OpenAI implemented)
+            if request.provider and request.provider.lower() != "openai":
+                yield json.dumps({
+                    "type": "result", 
+                    "content": f"Provider '{request.provider}' is not yet implemented. Only OpenAI is supported."
+                }) + "\n"
+                return
+
+            # Run agent streamer
+            async for event in run_agent_stream(
+                request.query,
+                openai_key=request.openai_key,
+                openai_model=request.openai_model
+            ):
+                yield json.dumps(event) + "\n"
+        
+        except Exception as exc:
+            logger.exception("Stream error")
+            yield json.dumps({"type": "error", "content": str(exc)}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
 if __name__ == "__main__":
     import uvicorn
+
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
