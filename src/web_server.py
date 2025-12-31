@@ -517,7 +517,13 @@ async def root():
     </style>
 
     <script>
-        const md = window.markdownit ? window.markdownit() : null; // check if markdown-it is available, else raw
+        // Global error handler to catch syntax or runtime errors
+        window.onerror = function(msg, url, line, col, error) {
+            alert("JS Error: " + msg + "\\nLine: " + line);
+            return false;
+        };
+
+        const md = window.markdownit ? window.markdownit() : null; 
 
         function setExample(text) {
             document.getElementById('query').value = text;
@@ -536,6 +542,7 @@ async def root():
         }
 
         async function submitQuery() {
+            console.log("submitQuery started");
             const query = document.getElementById('query').value.trim();
             if (!query) {
                 alert('Please enter a query');
@@ -550,21 +557,17 @@ async def root():
             const logsContent = document.getElementById('logsContent');
             const logsStatus = document.getElementById('logsStatus');
 
-            // Reset UI
-            submitBtn.disabled = true;
-            loading.classList.remove('show'); // We use logs instead of the spinner now, or both
-            resultContainer.classList.remove('show');
-            logsContainer.classList.add('show');
-            logsContent.innerHTML = '';
-            logsStatus.textContent = 'Starting agent...';
-            resultContent.innerHTML = '';
-
             try {
+                // Return debugging info
+                submitBtn.disabled = true;
+                logsContainer.classList.add('show');
+                logsContent.innerHTML = '';
+                logsStatus.textContent = 'Starting request...';
+                
                 // Collect params
                 const provider = document.querySelector('input[name="provider"]:checked')?.value || 'openai';
                 const openaiKey = document.getElementById('openaiKey').value.trim();
                 const openaiModel = document.getElementById('openaiModel').value.trim();
-                // (Others could be added here)
 
                 const payload = {
                     query: query,
@@ -573,12 +576,14 @@ async def root():
                     openai_model: openaiModel || null,
                 };
 
-                // Use the stream endpoint
+                console.log("Fetching /api/stream_query...");
                 const response = await fetch('/api/stream_query', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
+                
+                console.log("Response status:", response.status);
 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -594,10 +599,8 @@ async def root():
 
                     const chunk = decoder.decode(value, { stream: true });
                     buffer += chunk;
-                    
-                    // Split by newlines (SSE format usually sends line by line or json chunks)
                     const lines = buffer.split('\n');
-                    buffer = lines.pop(); // Keep the last partial line
+                    buffer = lines.pop(); 
 
                     for (const line of lines) {
                         if (!line.trim()) continue;
@@ -611,7 +614,9 @@ async def root():
                 }
 
             } catch (error) {
-                logsContent.innerHTML += `<div class="error">Network/System error: ${error.message}</div>`;
+                console.error("Submit error:", error);
+                alert("Error: " + error.message);
+                logsContent.innerHTML += `<div class="error">Error: ${error.message}</div>`;
                 logsStatus.textContent = 'Error occurred.';
             } finally {
                 submitBtn.disabled = false;
@@ -623,18 +628,16 @@ async def root():
             if (data.type === 'log') {
                 const div = document.createElement('div');
                 div.className = 'log-entry';
-                // Simple formatting
                 let html = data.content
                     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
                     .replace(/`(.*?)`/g, '<code>$1</code>')
                     .replace(/\n/g, '<br>');
                 div.innerHTML = `<span class="log-timestamp">${new Date().toLocaleTimeString()}</span> ${html}`;
                 logsContent.appendChild(div);
-                // Auto scroll
                 logsContent.scrollTop = logsContent.scrollHeight;
                 logsStatus.textContent = "Working...";
             } else if (data.type === 'result') {
-                resultContent.textContent = data.content; // Or use a markdown renderer if available
+                resultContent.textContent = data.content; 
                 resultContent.className = 'result-content';
                 resultContainer.classList.add('show');
                 logsStatus.textContent = 'Result received.';
@@ -654,7 +657,6 @@ async def root():
             document.getElementById('query').value = '';
         }
 
-        // Allow Enter key to submit
         document.getElementById('query').addEventListener('keydown', function(e) {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 submitQuery();
