@@ -144,24 +144,31 @@ class BrowserController:
             
             # Try to connect to existing Chrome browser via CDP first
             try:
+                print(f"🔍 Attempting to connect to Chrome at {self.CDP_URL}...")
                 self._browser = await self._playwright.chromium.connect_over_cdp(self.CDP_URL)
                 self._connected_to_existing = True
                 # Get existing context or create new one, then open a new tab
                 contexts = self._browser.contexts
                 if contexts:
                     context = contexts[0]
+                    print(f"📂 Using existing browser context")
                 else:
                     context = await self._browser.new_context()
+                    print(f"📂 Created new browser context")
                 self._page = await context.new_page()
                 print("✅ Connected to existing Chrome browser - opened new tab")
-            except Exception:
+            except Exception as e:
                 # Fall back to launching a new browser
-                print("ℹ️  No existing Chrome browser found, launching new browser...")
-                print("💡 Tip: Start Chrome with remote debugging to use existing browser:")
+                print(f"❌ Failed to connect to existing Chrome: {e}")
+                print("ℹ️  Launching new browser instead...")
+                print("💡 Tip: To use your existing Chrome browser (avoids CAPTCHAs):")
+                print("   1. Close ALL Chrome windows completely")
+                print("   2. Run this command to start Chrome:")
                 if sys.platform == "win32":
-                    print('   chrome.exe --remote-debugging-port=9222')
+                    print('      start chrome --remote-debugging-port=9222')
                 else:
-                    print('   google-chrome --remote-debugging-port=9222')
+                    print('      google-chrome --remote-debugging-port=9222')
+                print("   3. Then run the browsing agent again")
                 
                 self._connected_to_existing = False
                 launch_options = {
