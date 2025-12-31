@@ -336,7 +336,7 @@ class BrowserController:
         
         # Handle radio buttons and checkboxes - click instead of fill
         if input_type in ["radio", "checkbox"]:
-            await element.click()
+            await self._click_with_fallback(element, selector)
             await asyncio.sleep(0.3)
             html = await self.page.content()
             return clean_and_truncate_html(html)
@@ -375,6 +375,50 @@ class BrowserController:
         html = await self.page.content()
         return clean_and_truncate_html(html)
 
+    async def _click_with_fallback(self, element, selector: str = None) -> None:
+        """
+        Click an element with multiple fallback strategies for handling overlays/labels.
+        1. Try normal click
+        2. Try clicking the associated label (for radio/checkbox)
+        3. Try force click
+        4. Try JavaScript click
+        """
+        try:
+            # First try normal click with short timeout
+            await element.click(timeout=3000)
+            return
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check if a label is intercepting
+            if "intercepts pointer" in error_msg or "timeout" in error_msg:
+                # Try to find and click the associated label
+                element_id = await element.get_attribute("id")
+                if element_id:
+                    try:
+                        label = await self.page.query_selector(f'label[for="{element_id}"]')
+                        if label:
+                            await label.click(timeout=3000)
+                            return
+                    except:
+                        pass
+                
+                # Try force click
+                try:
+                    await element.click(force=True, timeout=3000)
+                    return
+                except:
+                    pass
+                
+                # Last resort: JavaScript click
+                try:
+                    await element.evaluate("el => el.click()")
+                    return
+                except:
+                    pass
+            
+            raise e
+
     async def select_option(self, selector: str, value: str) -> str:
         """
         Select an option from a dropdown, radio button group, or checkbox.
@@ -384,6 +428,7 @@ class BrowserController:
         For checkboxes: selector should target the checkbox input.
         
         The value can be the option value, visible text, or label.
+        Handles labels that intercept clicks automatically.
         """
         element = await self.page.query_selector(selector)
         
@@ -392,10 +437,21 @@ class BrowserController:
             radio_selector = f'input[type="radio"][value="{value}"]'
             element = await self.page.query_selector(radio_selector)
             if element:
-                await element.click()
+                await self._click_with_fallback(element, radio_selector)
                 await asyncio.sleep(0.3)
                 html = await self.page.content()
                 return clean_and_truncate_html(html)
+            
+            # Try to find label containing the value text and click it
+            try:
+                label = await self.page.query_selector(f'label:has-text("{value}")')
+                if label:
+                    await label.click(timeout=5000)
+                    await asyncio.sleep(0.3)
+                    html = await self.page.content()
+                    return clean_and_truncate_html(html)
+            except:
+                pass
             
             raise Exception(f"Element not found: {selector}")
         
@@ -414,25 +470,29 @@ class BrowserController:
                 except:
                     raise Exception(f"Could not select option '{value}' in dropdown")
         
-        # Handle radio button
+        # Handle radio button - use fallback clicking
         elif input_type.lower() == "radio":
-            await element.click()
+            await self._click_with_fallback(element, selector)
         
-        # Handle checkbox
+        # Handle checkbox - use fallback clicking
         elif input_type.lower() == "checkbox":
-            # Check if we need to check or uncheck
             is_checked = await element.is_checked()
+            should_click = False
+            
             if value.lower() in ["true", "yes", "check", "1", "on"] and not is_checked:
-                await element.click()
+                should_click = True
             elif value.lower() in ["false", "no", "uncheck", "0", "off"] and is_checked:
-                await element.click()
-            else:
+                should_click = True
+            elif value.lower() not in ["true", "yes", "check", "1", "on", "false", "no", "uncheck", "0", "off"]:
                 # Toggle if no specific value given
-                await element.click()
+                should_click = True
+            
+            if should_click:
+                await self._click_with_fallback(element, selector)
         
         # Handle clicking a label or button that acts as a selector
         else:
-            await element.click()
+            await self._click_with_fallback(element, selector)
         
         await asyncio.sleep(0.3)
         html = await self.page.content()
@@ -713,10 +773,13 @@ class BrowserController:
         """
         Click an element by its visible text content.
         Handles overlays and intercepted clicks using force mode and JS fallback.
+        Also handles labels for radio buttons/checkboxes (common for size selectors).
         """
         selectors_to_try = [
+            f'label:has-text("{text}")',  # Labels for radio/checkbox (size selectors)
             f"a:has-text(\"{text}\")",
             f"button:has-text(\"{text}\")",
+            f'span:has-text("{text}")',  # Spans often used in size selectors
             f"[aria-label*=\"{text}\" i]",
             f"text=\"{text}\"",
         ]
