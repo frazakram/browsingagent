@@ -360,7 +360,15 @@ class BrowserController:
         """
         Fill a search box and press Enter to submit.
         Tries the given selector first, then common search box patterns.
+        If on a blank page, automatically navigates to Google first.
         """
+        # Check if we're on a blank or empty page
+        current_url = self.page.url
+        if current_url in ["about:blank", "", "chrome://newtab/", "edge://newtab/"]:
+            # Navigate to Google first
+            await self.page.goto("https://www.google.com")
+            await asyncio.sleep(1)  # Wait for page to load
+        
         # Common search box selectors to try
         search_selectors = [
             selector,  # User-provided selector first
@@ -371,10 +379,12 @@ class BrowserController:
             'input[name="keyword"]',
             'input[name="keywords"]',
             'input[name="searchText"]',
+            'textarea[name="q"]',  # Google sometimes uses textarea
             'input[placeholder*="search" i]',
             'input[placeholder*="find" i]',
             'input[placeholder*="looking" i]',
             'input[aria-label*="search" i]',
+            'textarea[aria-label*="search" i]',  # Google textarea
             '#search',
             '#search-input',
             '#searchInput',
@@ -386,10 +396,15 @@ class BrowserController:
             '.searchbox',
             '[data-testid*="search"]',
             'input[autocomplete="off"]',  # Many search boxes disable autocomplete
+            'input[title*="search" i]',
+            'textarea[title*="search" i]',
         ]
         
         element = None
         used_selector = None
+        
+        # Wait a bit for dynamic content to load
+        await asyncio.sleep(0.5)
         
         for sel in search_selectors:
             if not sel:
@@ -397,22 +412,40 @@ class BrowserController:
             try:
                 element = await self.page.query_selector(sel)
                 if element:
-                    # Verify it's visible and an input
+                    # Verify it's visible and an input or textarea
                     is_visible = await element.is_visible()
                     tag = await element.evaluate("el => el.tagName.toLowerCase()")
-                    if is_visible and tag == "input":
+                    if is_visible and tag in ["input", "textarea"]:
                         used_selector = sel
                         break
             except:
                 pass
         
         if not element or not used_selector:
+            # If still not found, try navigating to Google and searching there
+            if "google.com" not in current_url:
+                await self.page.goto("https://www.google.com")
+                await asyncio.sleep(1)
+                
+                # Try again with Google-specific selectors
+                google_selectors = ['textarea[name="q"]', 'input[name="q"]', 'textarea[aria-label*="Search"]']
+                for sel in google_selectors:
+                    try:
+                        element = await self.page.query_selector(sel)
+                        if element and await element.is_visible():
+                            used_selector = sel
+                            break
+                    except:
+                        pass
+        
+        if not element or not used_selector:
             # Get available inputs to help the agent
             available = await self._get_available_inputs()
             raise Exception(
                 f"Search box not found with selector: {selector}\n"
+                f"Current URL: {self.page.url}\n"
                 f"Available input fields on page:\n{available}\n"
-                f"Tip: Use get_form_fields() to see all inputs, then use fill() + press('Enter')"
+                f"Tip: First use navigate('https://www.google.com'), then use search()"
             )
         
         await self.page.fill(used_selector, "")
