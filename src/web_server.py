@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from src.agent.config import settings  # noqa: F401  # trigger settings load early
 from src.agent.langchain_agent import run_agent
+from src.rag.rag_agent import RAGAgent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,6 +43,27 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     result: str
+    success: bool
+    error: Optional[str] = None
+
+
+class RAGRequest(BaseModel):
+    query: str
+    openai_key: Optional[str] = None
+    openai_model: Optional[str] = None
+    serper_key: Optional[str] = None
+    max_sources: Optional[int] = 8
+    enable_verification: Optional[bool] = True
+
+
+class RAGResponse(BaseModel):
+    answer: str
+    answer_html: str
+    sources: list
+    citations_used: list
+    confidence: float
+    verification_status: str
+    timing: dict
     success: bool
     error: Optional[str] = None
 
@@ -560,6 +582,67 @@ async def handle_query(request: QueryRequest):
         logger.exception("Agent execution failed: %s", exc)
         return QueryResponse(
             result="",
+            success=False,
+            error=str(exc),
+        )
+
+
+@app.post("/api/rag", response_model=RAGResponse)
+async def handle_rag_query(request: RAGRequest):
+    """
+    Handle a RAG query - Perplexity-style search and answer with citations.
+    
+    This endpoint searches the web, retrieves relevant information,
+    and generates an answer with inline citations.
+    """
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    logger.info("Received RAG query: %s", request.query)
+    
+    try:
+        # Use provided API key or fall back to settings
+        api_key = request.openai_key or settings.openai_api_key
+        serper_key = request.serper_key or (settings.serper_api_key if settings.serper_api_key else None)
+        model = request.openai_model or settings.openai_model
+        
+        # Create RAG agent
+        agent = RAGAgent(
+            openai_api_key=api_key,
+            serper_api_key=serper_key,
+            model=model,
+            max_sources=request.max_sources or settings.rag_max_sources,
+            enable_verification=request.enable_verification if request.enable_verification is not None else settings.rag_enable_verification,
+            enable_cache=settings.rag_enable_cache,
+        )
+        
+        try:
+            # Execute RAG pipeline
+            result = await agent.query(request.query)
+            
+            return RAGResponse(
+                answer=result.answer,
+                answer_html=result.answer_html,
+                sources=result.sources,
+                citations_used=result.citations_used,
+                confidence=result.confidence,
+                verification_status=result.verification_status,
+                timing=result.timing,
+                success=True
+            )
+        finally:
+            await agent.close()
+            
+    except Exception as exc:
+        logger.exception("RAG execution failed: %s", exc)
+        return RAGResponse(
+            answer="",
+            answer_html="",
+            sources=[],
+            citations_used=[],
+            confidence=0.0,
+            verification_status="error",
+            timing={},
             success=False,
             error=str(exc),
         )
